@@ -1,0 +1,72 @@
+---
+
+- name: Check variables are defined
+  assert:
+    that:
+      - "node_exporter_release_version is defined"
+      - "node_exporter_user is defined"
+      - "node_exporter_group is defined"
+
+- name: Get the Node Exporter release version from GitHub
+  uri:
+    url: https://api.github.com/repos/prometheus/node_exporter/releases/{{ node_exporter_release_version }}
+    return_content: true
+    status_code: 200
+    body_format: json
+  register: node_exporter_release
+
+- name: Get Node Exporter version
+  set_fact:
+    node_exporter_version: "{{ node_exporter_release.json.tag_name }}"
+    node_exporter_version_number: "{{ node_exporter_release.json.tag_name[1:] }}"
+
+- name: Create the Node Exporter group
+  group:
+    name: "{{ node_exporter_group }}"
+
+- name: Create the Node Exporter user
+  user:
+    name: "{{ node_exporter_user }}"
+    create_home: false
+    shell: /bin/false
+    group: "{{ node_exporter_group }}"
+
+- name: Install Node Exporter
+  unarchive:
+    src: https://github.com/prometheus/node_exporter/releases/download/{{ node_exporter_version }}/node_exporter-{{ node_exporter_version_number }}.linux-amd64.tar.gz
+    dest: /tmp/
+    remote_src: yes
+
+- name: Copy Node Exporter file to bin
+  copy:
+    src: "/tmp/node_exporter-{{ node_exporter_version_number }}.linux-amd64/node_exporter"
+    dest: /usr/local/bin/node_exporter
+    owner: "{{ node_exporter_user }}"
+    group: "{{ node_exporter_group }}"
+    remote_src: yes
+    mode: 0755
+
+- name: Delete Node Exporter tmp folder
+  file:
+    path: "/tmp/node_exporter-{{ node_exporter_version_number }}.linux-amd64"
+    state: absent
+
+- name: Copy systemd init file
+  template:
+    src: node_exporter.service.j2
+    dest: /etc/systemd/system/node_exporter.service
+  notify: systemd_reload
+
+- name: Start Node Exporter service
+  service:
+    name: node_exporter
+    state: started
+    enabled: yes
+
+- name: Check if Node Exporter emits metrices
+  uri:
+    url: http://127.0.0.1:9100/metrics
+    method: GET
+    status_code: 200
+  retries: 3
+  delay: 3
